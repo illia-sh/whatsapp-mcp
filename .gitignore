@@ -1,3 +1,17 @@
+# WhatsApp session + message stores (contain full account access / history)
 *.db
+
+# Local config
 claude_desktop_config.json
-whatsapp.log
+
+# Logs
+*.log
+
+# Compiled Go bridge binary (built from ./whatsapp-bridge)
+/whatsapp-bridge/whatsapp-bridge
+/whatsapp-bridge/whatsapp-client
+
+# Python
+__pycache__/
+*.py[oc]
+.venv/
