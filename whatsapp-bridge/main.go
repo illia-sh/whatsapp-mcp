@@ -774,8 +774,10 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		})
 	})
 
-	// Start the server
-	serverAddr := fmt.Sprintf(":%d", port)
+	// Start the server, bound to loopback only. This API can send messages and
+	// read media as the logged-in account, so it must not be reachable from the
+	// local network.
+	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
 
 	// Run server in a goroutine so it doesn't block
@@ -1290,14 +1292,6 @@ func analyzeOggOpus(data []byte) (duration uint32, waveform []byte, err error) {
 	return duration, waveform, nil
 }
 
-// min returns the smaller of x or y
-func min(x, y int) int {
-	if x < y {
-		return x
-	}
-	return y
-}
-
 // placeholderWaveform generates a synthetic waveform for WhatsApp voice messages
 // that appears natural with some variability based on the duration
 func placeholderWaveform(duration uint32) []byte {
@@ -1305,8 +1299,9 @@ func placeholderWaveform(duration uint32) []byte {
 	const waveformLength = 64
 	waveform := make([]byte, waveformLength)
 
-	// Seed the random number generator for consistent results with the same duration
-	rand.Seed(int64(duration))
+	// Seed a local generator so results are deterministic for a given duration
+	// without mutating the process-global RNG.
+	rng := rand.New(rand.NewSource(int64(duration)))
 
 	// Create a more natural looking waveform with some patterns and variability
 	// rather than completely random values
@@ -1325,7 +1320,7 @@ func placeholderWaveform(duration uint32) []byte {
 		val += (baseAmplitude / 2) * math.Sin(pos*math.Pi*frequencyFactor*16)
 
 		// Add some randomness to make it look more natural
-		val += (rand.Float64() - 0.5) * 15
+		val += (rng.Float64() - 0.5) * 15
 
 		// Add some fade-in and fade-out effects
 		fadeInOut := math.Sin(pos * math.Pi)
