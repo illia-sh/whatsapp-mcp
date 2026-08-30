@@ -9,8 +9,15 @@ import requests
 import json
 import audio
 
-MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
-WHATSAPP_API_BASE_URL = "http://localhost:8080/api"
+_DEFAULT_MESSAGES_DB_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db'
+)
+
+# Both are overridable so that one checkout can serve several WhatsApp accounts,
+# each backed by its own bridge instance (see the multi-account section of the
+# README).
+MESSAGES_DB_PATH = os.environ.get("WHATSAPP_MESSAGES_DB", _DEFAULT_MESSAGES_DB_PATH)
+WHATSAPP_API_BASE_URL = os.environ.get("WHATSAPP_API_BASE_URL", "http://localhost:8080/api")
 
 # This module is imported by an MCP server that speaks JSON-RPC over stdout.
 # Anything written to stdout corrupts that stream, so all diagnostics must go
