@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,6 +32,38 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Bridge configuration defaults. Both are overridable via the environment so
+// that several WhatsApp accounts can run side by side, each with its own REST
+// port and its own session/message databases.
+const (
+	defaultBridgePort = 8080
+	defaultStoreDir   = "store"
+)
+
+// resolveStoreDir returns the directory holding the session and message
+// databases (WHATSAPP_STORE_DIR, default "store").
+func resolveStoreDir() string {
+	if dir := os.Getenv("WHATSAPP_STORE_DIR"); dir != "" {
+		return dir
+	}
+	return defaultStoreDir
+}
+
+// resolveBridgePort returns the port the REST API listens on
+// (WHATSAPP_BRIDGE_PORT, default 8080).
+func resolveBridgePort(logger waLog.Logger) int {
+	raw := os.Getenv("WHATSAPP_BRIDGE_PORT")
+	if raw == "" {
+		return defaultBridgePort
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port < 1 || port > 65535 {
+		logger.Warnf("Invalid WHATSAPP_BRIDGE_PORT %q, falling back to %d", raw, defaultBridgePort)
+		return defaultBridgePort
+	}
+	return port
+}
+
 // Message represents a chat message for our client
 type Message struct {
 	Time      time.Time
@@ -44,17 +77,19 @@ type Message struct {
 // Database handler for storing message history
 type MessageStore struct {
 	db *sql.DB
+	// storeDir is where this account's databases and downloaded media live.
+	storeDir string
 }
 
 // Initialize message store
-func NewMessageStore() (*MessageStore, error) {
+func NewMessageStore(storeDir string) (*MessageStore, error) {
 	// Create directory for database if it doesn't exist
-	if err := os.MkdirAll("store", 0755); err != nil {
+	if err := os.MkdirAll(storeDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create store directory: %v", err)
 	}
 
 	// Open SQLite database for messages
-	db, err := sql.Open("sqlite3", "file:store/messages.db?_foreign_keys=on")
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(storeDir, "messages.db")+"?_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open message database: %v", err)
 	}
@@ -90,7 +125,7 @@ func NewMessageStore() (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create tables: %v", err)
 	}
 
-	return &MessageStore{db: db}, nil
+	return &MessageStore{db: db, storeDir: storeDir}, nil
 }
 
 // Close the database connection
@@ -562,7 +597,7 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	var err error
 
 	// First, check if we already have this file
-	chatDir := fmt.Sprintf("store/%s", strings.ReplaceAll(chatJID, ":", "_"))
+	chatDir := filepath.Join(messageStore.storeDir, strings.ReplaceAll(chatJID, ":", "_"))
 	localPath := ""
 
 	// Get media info from the database
@@ -796,13 +831,15 @@ func main() {
 	// Create database connection for storing session data
 	dbLog := waLog.Stdout("Database", "INFO", true)
 
-	// Create directory for database if it doesn't exist
-	if err := os.MkdirAll("store", 0755); err != nil {
+	// Resolve where this account's databases live and create the directory
+	storeDir := resolveStoreDir()
+	if err := os.MkdirAll(storeDir, 0755); err != nil {
 		logger.Errorf("Failed to create store directory: %v", err)
 		return
 	}
+	logger.Infof("Using store directory: %s", storeDir)
 
-	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New(context.Background(), "sqlite3", "file:"+filepath.Join(storeDir, "whatsapp.db")+"?_foreign_keys=on", dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
@@ -829,7 +866,7 @@ func main() {
 	}
 
 	// Initialize message store
-	messageStore, err := NewMessageStore()
+	messageStore, err := NewMessageStore(storeDir)
 	if err != nil {
 		logger.Errorf("Failed to initialize message store: %v", err)
 		return
@@ -908,7 +945,7 @@ func main() {
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
 	// Start REST API server
-	startRESTServer(client, messageStore, 8080)
+	startRESTServer(client, messageStore, resolveBridgePort(logger))
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
