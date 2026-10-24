@@ -30,8 +30,10 @@ These steps set up **one WhatsApp account**, which is what most people want. To 
 
 1. **Clone this repository**
 
+   Replace `<your-fork-url>` with the clone URL of your fork of this repository (or of this repository itself):
+
    ```bash
-   git clone https://github.com/illia-sh/whatsapp-mcp.git
+   git clone <your-fork-url> whatsapp-mcp
    cd whatsapp-mcp
    ```
 
