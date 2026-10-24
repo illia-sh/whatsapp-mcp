@@ -1,5 +1,7 @@
+import os
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
+from auth import build_auth
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -15,8 +17,26 @@ from whatsapp import (
     download_media as whatsapp_download_media
 )
 
-# Initialize FastMCP server
-mcp = FastMCP("whatsapp")
+# Transport is chosen by the environment so the same code serves both the local
+# Claude Desktop setup (stdio, launched as a subprocess) and a hosted
+# deployment (streamable-http behind TLS). stdio stays the default so existing
+# installs are unaffected.
+TRANSPORT = os.environ.get("WHATSAPP_MCP_TRANSPORT", "stdio")
+
+if TRANSPORT == "stdio":
+    # Nothing to authenticate: the only client is the process that spawned us.
+    mcp = FastMCP("whatsapp")
+else:
+    # Bind to loopback by default. Terminating TLS and facing the internet is a
+    # reverse proxy's job; this process should never be the public listener.
+    _token_verifier, _auth_settings = build_auth()
+    mcp = FastMCP(
+        "whatsapp",
+        token_verifier=_token_verifier,
+        auth=_auth_settings,
+        host=os.environ.get("WHATSAPP_MCP_HOST", "127.0.0.1"),
+        port=int(os.environ.get("WHATSAPP_MCP_PORT", "9000")),
+    )
 
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:
@@ -248,4 +268,4 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     # Initialize and run the server
-    mcp.run(transport='stdio')
+    mcp.run(transport=TRANSPORT)

@@ -191,6 +191,25 @@ Both components work with no configuration at all. These environment variables e
 | --- | --- | --- |
 | `WHATSAPP_API_BASE_URL` | `http://localhost:8080/api` | The bridge this server sends messages through. |
 | `WHATSAPP_MESSAGES_DB` | `../whatsapp-bridge/store/messages.db` | The message database this server reads. |
+| `WHATSAPP_MCP_TRANSPORT` | `stdio` | `stdio` for a local Claude Desktop install; `streamable-http` to serve over HTTP for a hosted deployment. |
+| `WHATSAPP_MCP_HOST` | `127.0.0.1` | HTTP transport only. Leave on loopback and put a TLS-terminating reverse proxy in front; this process should never be the public listener. |
+| `WHATSAPP_MCP_PORT` | `9000` | HTTP transport only. |
+| `WHATSAPP_MCP_TOKEN` | *(none)* | HTTP transport only, **required**. The shared bearer token Claude must present. At least 32 characters. |
+| `WHATSAPP_MCP_PUBLIC_URL` | *(none)* | HTTP transport only, **required**. The public `https://` address Claude reaches the server on. |
+
+### Serving over HTTP
+
+By default the MCP server speaks stdio and is launched as a subprocess by Claude Desktop, which is what the install steps above set up. Setting `WHATSAPP_MCP_TRANSPORT=streamable-http` instead serves the Streamable HTTP transport, so the server can run on a host of its own and be added to Claude as a custom connector by URL.
+
+That endpoint can read and send every message on the linked account, so it requires a bearer token. Generate one with:
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+```
+
+Set it as `WHATSAPP_MCP_TOKEN` on the server, and give Claude the same value as an `Authorization: Bearer <token>` request header when adding the connector. Requests without it, or with the wrong one, are rejected with `401`.
+
+The server refuses to start over HTTP if the token is missing or shorter than 32 characters, or if `WHATSAPP_MCP_PUBLIC_URL` is not `https://` — the token travels in a header on every request, so running without TLS would expose it. Run both the bridge and this server on the same host, keep both on loopback, and expose only this server through a reverse proxy that terminates TLS.
 
 The two sides must agree: an MCP server's `WHATSAPP_API_BASE_URL` port has to match its bridge's `WHATSAPP_BRIDGE_PORT`, and its `WHATSAPP_MESSAGES_DB` has to point inside that bridge's `WHATSAPP_STORE_DIR`.
 
