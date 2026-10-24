@@ -110,6 +110,70 @@ Without this setup, you'll likely run into errors like:
 
 > `Binary was compiled with 'CGO_ENABLED=0', go-sqlite3 requires cgo to work.`
 
+## Running and restarting
+
+Day-to-day operation. The bridge is a foreground process, not a background service — it has to be running whenever you want Claude to reach WhatsApp.
+
+### Starting
+
+```bash
+cd whatsapp-bridge
+go run main.go
+```
+
+Wait for both lines:
+
+```
+✓ Connected to WhatsApp! Type 'help' for commands.
+Starting REST API server on 127.0.0.1:8080...
+```
+
+Then leave that terminal open. You never start the Python MCP server yourself — Claude Desktop launches it on demand, so it needs nothing from you.
+
+### Checking what is running
+
+```bash
+# Is a bridge listening?
+lsof -nP -iTCP:8080 -sTCP:LISTEN
+
+# Does it answer? ("Recipient is required" means yes, it's up)
+curl -s -X POST http://127.0.0.1:8080/api/send \
+  -H 'Content-Type: application/json' -d '{"recipient":"","message":"x"}'
+
+# Which account is currently linked?
+sqlite3 whatsapp-bridge/store/whatsapp.db "SELECT jid FROM whatsmeow_device;"
+```
+
+### Stopping and restarting
+
+`Ctrl+C` in the bridge terminal, then start it again. The session persists across restarts, so there is no new QR code to scan.
+
+If startup fails with `bind: address already in use`, a bridge from an earlier run is still alive:
+
+```bash
+lsof -nP -iTCP:8080 -sTCP:LISTEN   # find the PID
+kill <PID>
+```
+
+### After changing the Claude Desktop config
+
+Edits to `claude_desktop_config.json` only take effect after a **full quit** of Claude Desktop (`⌘Q` on macOS) and reopening it. Toggling the connector off and on does not reload the file.
+
+### Linking and re-linking a device
+
+The bridge shows up on your phone under **Settings > Linked Devices**, alongside WhatsApp Web and the desktop app. You can revoke its access from there at any time.
+
+- **First link**: start the bridge, and scan the QR code it prints.
+- **Link expired**: WhatsApp drops linked devices after roughly 20 days of inactivity. The bridge logs `401: logged out from another device`, discards the dead session, and prints a fresh QR code — scan it and you're back. Your message history is kept.
+- **Unlinked from the phone**: the same thing happens on the next start; scan the new QR code.
+- **Starting the session over deliberately**: stop the bridge, then remove **only** the session database:
+
+  ```bash
+  rm whatsapp-bridge/store/whatsapp.db
+  ```
+
+  The next start prints a QR code. Keep `messages.db` — it holds your entire message history and is independent of the session. (For a second account, use its own store directory, e.g. `store-work/whatsapp.db`.)
+
 ## Configuration
 
 Both components work with no configuration at all. These environment variables exist so that more than one account can run side by side — you only need them for the multi-account setup below.
@@ -256,7 +320,8 @@ By default, just the metadata of the media is stored in the local database. The 
 - **WhatsApp Already Logged In**: If your session is already active, the Go bridge will automatically reconnect without showing a QR code.
 - **Device Limit Reached**: WhatsApp limits the number of linked devices. If you reach this limit, you'll need to remove an existing device from WhatsApp on your phone (Settings > Linked Devices).
 - **No Messages Loading**: After initial authentication, it can take several minutes for your message history to load, especially if you have many chats.
-- **WhatsApp Out of Sync**: If your WhatsApp messages get out of sync with the bridge, delete both database files (`whatsapp-bridge/store/messages.db` and `whatsapp-bridge/store/whatsapp.db`) and restart the bridge to re-authenticate. For a second account, delete the equivalent files inside its own store directory.
+- **Session Rejected / `401: logged out`**: the linked device expired or was unlinked from the phone. The bridge handles this itself — it drops the dead session and prints a new QR code. Scan it; your message history is kept. See [Linking and re-linking a device](#linking-and-re-linking-a-device).
+- **WhatsApp Out of Sync**: if your messages get out of sync with the bridge, stop it and delete the session database only — `rm whatsapp-bridge/store/whatsapp.db` — then restart and scan the QR code. Deleting `messages.db` as well is almost never what you want: it throws away your whole local message history and the re-sync only recovers what WhatsApp still serves. (For a second account, use its own store directory.)
 
 ### Multi-Account Issues
 

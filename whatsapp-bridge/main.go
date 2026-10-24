@@ -823,6 +823,65 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 	}()
 }
 
+// sessionResumeTimeout bounds how long we wait for WhatsApp to accept or
+// reject a stored session before giving up.
+const sessionResumeTimeout = 30 * time.Second
+
+// raise signals ch without blocking, so an event handler never stalls when a
+// previous signal has not been consumed.
+func raise(ch chan<- struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+// pairWithQR connects the client and prints a QR code to scan with the phone.
+// It returns once pairing has succeeded.
+func pairWithQR(client *whatsmeow.Client, logger waLog.Logger) error {
+	qrChan, _ := client.GetQRChannel(context.Background())
+	if err := client.Connect(); err != nil {
+		return fmt.Errorf("failed to connect: %v", err)
+	}
+
+	for evt := range qrChan {
+		switch evt.Event {
+		case "code":
+			fmt.Println("\nScan this QR code with your WhatsApp app (Settings > Linked Devices > Link a Device):")
+			qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+		case "success":
+			fmt.Println("\nSuccessfully connected and authenticated!")
+			return nil
+		case "timeout":
+			return fmt.Errorf("timed out waiting for the QR code to be scanned")
+		default:
+			logger.Debugf("Pairing event: %s", evt.Event)
+		}
+	}
+
+	return fmt.Errorf("pairing channel closed before authentication completed")
+}
+
+// resumeSession connects using the stored session and waits for WhatsApp to
+// either accept it (a Connected event) or reject it (a LoggedOut event). The
+// returned bool reports a rejected session, meaning the caller must re-pair.
+func resumeSession(client *whatsmeow.Client, connectedEvt, loggedOut <-chan struct{}) (bool, error) {
+	if err := client.Connect(); err != nil {
+		return false, fmt.Errorf("failed to connect: %v", err)
+	}
+
+	// A rejected session arrives as a LoggedOut event rather than an error from
+	// Connect, so watching the events is the only way to tell the outcomes apart.
+	select {
+	case <-loggedOut:
+		return true, nil
+	case <-connectedEvt:
+		return false, nil
+	case <-time.After(sessionResumeTimeout):
+		return false, fmt.Errorf("timed out waiting for WhatsApp to accept the stored session")
+	}
+}
+
 func main() {
 	// Set up logger
 	logger := waLog.Stdout("Client", "INFO", true)
@@ -873,8 +932,14 @@ func main() {
 	}
 	defer messageStore.Close()
 
-	// Setup event handling for messages and history sync
-	client.AddEventHandler(func(evt interface{}) {
+	// Signals raised by the event handler during the connection handshake
+	connectedEvt := make(chan struct{}, 1)
+	loggedOut := make(chan struct{}, 1)
+
+	// Setup event handling for messages and history sync. The closure reads the
+	// client variable rather than capturing a fixed pointer, so it keeps working
+	// if the client has to be replaced after a re-pairing.
+	eventHandler := func(evt interface{}) {
 		switch v := evt.(type) {
 		case *events.Message:
 			// Process regular messages
@@ -886,52 +951,54 @@ func main() {
 
 		case *events.Connected:
 			logger.Infof("Connected to WhatsApp")
+			raise(connectedEvt)
 
 		case *events.LoggedOut:
-			logger.Warnf("Device logged out, please scan QR code to log in again")
+			logger.Warnf("Device logged out, re-pairing is required")
+			raise(loggedOut)
 		}
-	})
+	}
+	client.AddEventHandler(eventHandler)
 
-	// Create channel to track connection success
-	connected := make(chan bool, 1)
-
-	// Connect to WhatsApp
+	// Connect to WhatsApp, pairing first when there is no usable session
 	if client.Store.ID == nil {
 		// No ID stored, this is a new client, need to pair with phone
-		qrChan, _ := client.GetQRChannel(context.Background())
-		err = client.Connect()
-		if err != nil {
-			logger.Errorf("Failed to connect: %v", err)
-			return
-		}
-
-		// Print QR code for pairing with phone
-		for evt := range qrChan {
-			if evt.Event == "code" {
-				fmt.Println("\nScan this QR code with your WhatsApp app:")
-				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-			} else if evt.Event == "success" {
-				connected <- true
-				break
-			}
-		}
-
-		// Wait for connection
-		select {
-		case <-connected:
-			fmt.Println("\nSuccessfully connected and authenticated!")
-		case <-time.After(3 * time.Minute):
-			logger.Errorf("Timeout waiting for QR code scan")
+		if err := pairWithQR(client, logger); err != nil {
+			logger.Errorf("%v", err)
 			return
 		}
 	} else {
-		// Already logged in, just connect
-		err = client.Connect()
+		rejected, err := resumeSession(client, connectedEvt, loggedOut)
 		if err != nil {
-			logger.Errorf("Failed to connect: %v", err)
+			logger.Errorf("%v", err)
 			return
 		}
-		connected <- true
+
+		if rejected {
+			// WhatsApp refused the stored session, which happens when the device
+			// is unlinked from the phone or expires after a few weeks of
+			// inactivity. Drop the dead device and pair again here: exiting
+			// instead would leave the stale record behind, and every later run
+			// would be refused the same way without ever showing a QR code.
+			logger.Warnf("Stored session was rejected by WhatsApp, starting a new pairing")
+			client.Disconnect()
+			if err := deviceStore.Delete(context.Background()); err != nil {
+				logger.Warnf("Failed to remove the stale device: %v", err)
+			}
+
+			deviceStore = container.NewDevice()
+			client = whatsmeow.NewClient(deviceStore, logger)
+			if client == nil {
+				logger.Errorf("Failed to create WhatsApp client")
+				return
+			}
+			client.AddEventHandler(eventHandler)
+
+			if err := pairWithQR(client, logger); err != nil {
+				logger.Errorf("%v", err)
+				return
+			}
+		}
 	}
 
 	// Wait a moment for connection to stabilize
