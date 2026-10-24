@@ -26,10 +26,12 @@ Here's an example of what you can do when it's connected to Claude.
 
 ### Steps
 
+These steps set up **one WhatsApp account**, which is what most people want. To connect a second account (a second phone number) as well, follow these steps first, then see [Running two WhatsApp accounts](#running-two-whatsapp-accounts).
+
 1. **Clone this repository**
 
    ```bash
-   git clone https://github.com/lharries/whatsapp-mcp.git
+   git clone https://github.com/illia-sh/whatsapp-mcp.git
    cd whatsapp-mcp
    ```
 
@@ -43,6 +45,8 @@ Here's an example of what you can do when it's connected to Claude.
    ```
 
    The first time you run it, you will be prompted to scan a QR code. Scan the QR code with your WhatsApp mobile app to authenticate.
+
+   With no configuration, the bridge listens on `127.0.0.1:8080` and keeps its databases in `whatsapp-bridge/store/`. Leave it running — the MCP server talks to it.
 
    After approximately 20 days, you will might need to re-authenticate.
 
@@ -106,6 +110,79 @@ Without this setup, you'll likely run into errors like:
 
 > `Binary was compiled with 'CGO_ENABLED=0', go-sqlite3 requires cgo to work.`
 
+## Configuration
+
+Both components work with no configuration at all. These environment variables exist so that more than one account can run side by side — you only need them for the multi-account setup below.
+
+**Go bridge** (`whatsapp-bridge`):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WHATSAPP_BRIDGE_PORT` | `8080` | Port the local REST API listens on (always bound to `127.0.0.1`). Invalid values fall back to the default with a warning. |
+| `WHATSAPP_STORE_DIR` | `store` | Directory holding `whatsapp.db` (session), `messages.db` (history), and downloaded media. Relative paths are resolved against the working directory. |
+
+**Python MCP server** (`whatsapp-mcp-server`):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WHATSAPP_API_BASE_URL` | `http://localhost:8080/api` | The bridge this server sends messages through. |
+| `WHATSAPP_MESSAGES_DB` | `../whatsapp-bridge/store/messages.db` | The message database this server reads. |
+
+The two sides must agree: an MCP server's `WHATSAPP_API_BASE_URL` port has to match its bridge's `WHATSAPP_BRIDGE_PORT`, and its `WHATSAPP_MESSAGES_DB` has to point inside that bridge's `WHATSAPP_STORE_DIR`.
+
+## Running two WhatsApp accounts
+
+Each WhatsApp account needs its own bridge (its own session, port, and databases) and its own MCP server entry. One clone of this repository serves both — you don't need a second copy.
+
+The result is two separate integrations in Claude, so you can say "send this from my work number" and Claude picks the right one.
+
+1. **Start a bridge for each account**, in two terminals. Each needs a distinct port and store directory:
+
+   ```bash
+   # Terminal 1 — personal account (defaults, same as the single-account setup)
+   cd whatsapp-bridge
+   go run main.go
+   ```
+
+   ```bash
+   # Terminal 2 — work account
+   cd whatsapp-bridge
+   WHATSAPP_BRIDGE_PORT=8081 WHATSAPP_STORE_DIR=store-work go run main.go
+   ```
+
+   Each bridge prompts for its own QR code on first run — scan each with the corresponding phone. The two pairings are independent; linking both changes nothing about either account.
+
+2. **Register both MCP servers.** Give each a distinct name and point it at its own bridge:
+
+   ```json
+   {
+     "mcpServers": {
+       "whatsapp-personal": {
+         "command": "{{PATH_TO_UV}}",
+         "args": ["--directory", "{{PATH_TO_SRC}}/whatsapp-mcp/whatsapp-mcp-server", "run", "main.py"],
+         "env": {
+           "WHATSAPP_API_BASE_URL": "http://localhost:8080/api",
+           "WHATSAPP_MESSAGES_DB": "{{PATH_TO_SRC}}/whatsapp-mcp/whatsapp-bridge/store/messages.db"
+         }
+       },
+       "whatsapp-work": {
+         "command": "{{PATH_TO_UV}}",
+         "args": ["--directory", "{{PATH_TO_SRC}}/whatsapp-mcp/whatsapp-mcp-server", "run", "main.py"],
+         "env": {
+           "WHATSAPP_API_BASE_URL": "http://localhost:8081/api",
+           "WHATSAPP_MESSAGES_DB": "{{PATH_TO_SRC}}/whatsapp-mcp/whatsapp-bridge/store-work/messages.db"
+         }
+       }
+     }
+   }
+   ```
+
+   Use absolute paths for `WHATSAPP_MESSAGES_DB` — the MCP server is launched by Claude Desktop, not from your shell, so its working directory is not this repository.
+
+3. **Fully quit and reopen Claude Desktop** (not just toggling the connector). Both integrations should appear, each with its own set of WhatsApp tools.
+
+The same pattern extends to a third account: another port, another store directory, another MCP server entry.
+
 ## Architecture Overview
 
 This application consists of two main components:
@@ -116,9 +193,10 @@ This application consists of two main components:
 
 ### Data Storage
 
-- All message history is stored in a SQLite database within the `whatsapp-bridge/store/` directory
+- All message history is stored in a SQLite database within the `whatsapp-bridge/store/` directory (or wherever `WHATSAPP_STORE_DIR` points)
 - The database maintains tables for chats and messages
 - Messages are indexed for efficient searching and retrieval
+- Each account has its own store directory, so accounts never share session or message data
 
 ## Usage
 
@@ -178,6 +256,12 @@ By default, just the metadata of the media is stored in the local database. The 
 - **WhatsApp Already Logged In**: If your session is already active, the Go bridge will automatically reconnect without showing a QR code.
 - **Device Limit Reached**: WhatsApp limits the number of linked devices. If you reach this limit, you'll need to remove an existing device from WhatsApp on your phone (Settings > Linked Devices).
 - **No Messages Loading**: After initial authentication, it can take several minutes for your message history to load, especially if you have many chats.
-- **WhatsApp Out of Sync**: If your WhatsApp messages get out of sync with the bridge, delete both database files (`whatsapp-bridge/store/messages.db` and `whatsapp-bridge/store/whatsapp.db`) and restart the bridge to re-authenticate.
+- **WhatsApp Out of Sync**: If your WhatsApp messages get out of sync with the bridge, delete both database files (`whatsapp-bridge/store/messages.db` and `whatsapp-bridge/store/whatsapp.db`) and restart the bridge to re-authenticate. For a second account, delete the equivalent files inside its own store directory.
+
+### Multi-Account Issues
+
+- **`bind: address already in use`**: Another bridge (possibly a leftover from an earlier run) already holds that port. Find it with `lsof -nP -iTCP:8080 -sTCP:LISTEN` and stop it, or give the new bridge a different `WHATSAPP_BRIDGE_PORT`.
+- **Both accounts show the same messages**: The two bridges are sharing a store directory. Confirm each was started with a distinct `WHATSAPP_STORE_DIR` — the bridge logs `Using store directory: ...` at startup.
+- **An account's tools return nothing or time out**: Its `WHATSAPP_API_BASE_URL` and `WHATSAPP_MESSAGES_DB` are probably pointing at the other account's bridge, or at a bridge that isn't running. Each MCP server must match exactly one bridge.
 
 For additional Claude Desktop integration troubleshooting, see the [MCP documentation](https://modelcontextprotocol.io/quickstart/server#claude-for-desktop-integration-issues). The documentation includes helpful tips for checking logs and resolving common issues.

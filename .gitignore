@@ -1,6 +1,11 @@
 # WhatsApp session + message stores (contain full account access / history)
 *.db
 
+# Bridge store directories, including downloaded media. One per account:
+# "store" by default, plus whatever WHATSAPP_STORE_DIR points at.
+/whatsapp-bridge/store/
+/whatsapp-bridge/store-*/
+
 # Local config
 claude_desktop_config.json
 
