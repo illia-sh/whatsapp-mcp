@@ -13,9 +13,11 @@ access, move to OAuth rather than handing out copies of this secret.
 import os
 import secrets
 from typing import Optional, Tuple
+from urllib.parse import urlsplit
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl
 
 TOKEN_ENV = "WHATSAPP_MCP_TOKEN"
@@ -86,3 +88,39 @@ def build_auth() -> Tuple[TokenVerifier, AuthSettings]:
         validate_token_resource=False,
     )
     return StaticTokenVerifier(token), settings
+
+
+# What the SDK allows by default when bound to loopback. Kept so that local
+# health checks against 127.0.0.1 keep working alongside the public hostname.
+_LOOPBACK_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+_LOOPBACK_ORIGINS = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+
+
+def build_transport_security(public_url: str) -> TransportSecuritySettings:
+    """Allow the public hostname through DNS-rebinding protection.
+
+    Binding to 127.0.0.1 makes the SDK enable DNS-rebinding protection with only
+    loopback hosts allowed. Behind a reverse proxy that forwards the client's
+    Host header, every real request then arrives as `Host: <public host>` and is
+    refused with 421 -- even with a valid token. So the public host has to be
+    added explicitly. Protection stays on: any other Host is still refused.
+    """
+    parts = urlsplit(public_url)
+    hostname = parts.hostname or ""
+    netloc = parts.netloc  # includes ":port" only when the URL names one
+
+    allowed_hosts = list(_LOOPBACK_HOSTS)
+    allowed_origins = list(_LOOPBACK_ORIGINS)
+    for value in {netloc, hostname}:
+        allowed_hosts.append(value)
+    # A proxy may forward an explicit port, e.g. "mcp.example.com:443".
+    allowed_hosts.append(f"{hostname}:*")
+    # Origin is absent on server-to-server requests and the SDK accepts that;
+    # this covers a client that does send one.
+    allowed_origins.append(f"https://{netloc}")
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )

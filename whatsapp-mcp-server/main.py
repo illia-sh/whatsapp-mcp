@@ -1,7 +1,7 @@
 import os
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
-from auth import build_auth
+from auth import build_auth, build_transport_security
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -34,6 +34,7 @@ else:
         "whatsapp",
         token_verifier=_token_verifier,
         auth=_auth_settings,
+        transport_security=build_transport_security(str(_auth_settings.resource_server_url)),
         host=os.environ.get("WHATSAPP_MCP_HOST", "127.0.0.1"),
         port=int(os.environ.get("WHATSAPP_MCP_PORT", "9000")),
     )
