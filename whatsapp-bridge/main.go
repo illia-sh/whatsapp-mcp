@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -711,7 +712,18 @@ func extractDirectPathFromURL(url string) string {
 }
 
 // Start a REST API server to expose the WhatsApp client functionality
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) error {
+	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	// Bind before registering any handlers, so that a port clash fails fast and
+	// visibly. Binding inside the serving goroutine instead would only print the
+	// error into the scrollback while the bridge carried on running with no
+	// reachable API -- which looks healthy but silently serves nothing.
+	listener, err := net.Listen("tcp", serverAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %v", serverAddr, err)
+	}
+
 	// Handler for sending messages
 	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
@@ -809,18 +821,19 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		})
 	})
 
-	// Start the server, bound to loopback only. This API can send messages and
-	// read media as the logged-in account, so it must not be reachable from the
-	// local network.
-	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	// Serve on the listener bound above. It is loopback-only: this API can send
+	// messages and read media as the logged-in account, so it must not be
+	// reachable from the local network.
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
 
 	// Run server in a goroutine so it doesn't block
 	go func() {
-		if err := http.ListenAndServe(serverAddr, nil); err != nil {
+		if err := http.Serve(listener, nil); err != nil {
 			fmt.Printf("REST API server error: %v\n", err)
 		}
 	}()
+
+	return nil
 }
 
 // sessionResumeTimeout bounds how long we wait for WhatsApp to accept or
@@ -1012,7 +1025,11 @@ func main() {
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
 	// Start REST API server
-	startRESTServer(client, messageStore, resolveBridgePort(logger))
+	if err := startRESTServer(client, messageStore, resolveBridgePort(logger)); err != nil {
+		logger.Errorf("%v", err)
+		logger.Errorf("Another bridge is probably already using that port. Stop it, or set WHATSAPP_BRIDGE_PORT to a free port.")
+		return
+	}
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)

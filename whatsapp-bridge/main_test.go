@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"testing"
 
 	waLog "go.mau.fi/whatsmeow/util/log"
@@ -51,5 +52,23 @@ func TestResolveBridgePort(t *testing.T) {
 				t.Errorf("resolveBridgePort() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStartRESTServerPortInUse(t *testing.T) {
+	// Occupy a port, then confirm the bridge reports the clash instead of
+	// carrying on with no reachable API.
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not occupy a port: %v", err)
+	}
+	defer occupied.Close()
+
+	port := occupied.Addr().(*net.TCPAddr).Port
+
+	// startRESTServer binds before it registers handlers or touches the client,
+	// so nil arguments are never dereferenced on this path.
+	if err := startRESTServer(nil, nil, port); err == nil {
+		t.Fatalf("expected an error binding the occupied port %d, got nil", port)
 	}
 }

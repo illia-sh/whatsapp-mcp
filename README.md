@@ -148,12 +148,21 @@ sqlite3 whatsapp-bridge/store/whatsapp.db "SELECT jid FROM whatsmeow_device;"
 
 `Ctrl+C` in the bridge terminal, then start it again. The session persists across restarts, so there is no new QR code to scan.
 
-If startup fails with `bind: address already in use`, a bridge from an earlier run is still alive:
+If another bridge is already using the port, this one exits immediately rather than running on without a reachable API:
+
+```
+[Client ERROR] failed to listen on 127.0.0.1:8080: ... address already in use
+[Client ERROR] Another bridge is probably already using that port. Stop it, or set WHATSAPP_BRIDGE_PORT to a free port.
+```
+
+Find the process holding it and stop it:
 
 ```bash
 lsof -nP -iTCP:8080 -sTCP:LISTEN   # find the PID
 kill <PID>
 ```
+
+Check one port at a time — `lsof -iTCP:8080,:8081` does **not** do what it looks like, and will report nothing.
 
 ### After changing the Claude Desktop config
 
@@ -327,6 +336,7 @@ By default, just the metadata of the media is stored in the local database. The 
 
 - **`bind: address already in use`**: Another bridge (possibly a leftover from an earlier run) already holds that port. Find it with `lsof -nP -iTCP:8080 -sTCP:LISTEN` and stop it, or give the new bridge a different `WHATSAPP_BRIDGE_PORT`.
 - **Both accounts show the same messages**: The two bridges are sharing a store directory. Confirm each was started with a distinct `WHATSAPP_STORE_DIR` — the bridge logs `Using store directory: ...` at startup.
+- **Never run two bridges against one store directory**: both would drive the same WhatsApp session, and the two copies of its end-to-end encryption state can diverge and corrupt the session. One account, one store directory, one bridge. If you are unsure how many are running, `pgrep -fl 'exe/main'` lists them.
 - **An account's tools return nothing or time out**: Its `WHATSAPP_API_BASE_URL` and `WHATSAPP_MESSAGES_DB` are probably pointing at the other account's bridge, or at a bridge that isn't running. Each MCP server must match exactly one bridge.
 
 For additional Claude Desktop integration troubleshooting, see the [MCP documentation](https://modelcontextprotocol.io/quickstart/server#claude-for-desktop-integration-issues). The documentation includes helpful tips for checking logs and resolving common issues.
