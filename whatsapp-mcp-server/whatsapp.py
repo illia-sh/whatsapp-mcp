@@ -66,6 +66,39 @@ class MessageContext:
     before: List[Message]
     after: List[Message]
 
+# The bridge records chats.last_message_time, but matching it back to a row in
+# messages by timestamp equality is unreliable: it misses whenever the stored
+# value does not match a message timestamp exactly, and duplicates a chat when
+# two messages share the newest timestamp. Rank the messages per chat instead
+# and keep the newest.
+_LAST_MESSAGE_JOIN = """
+    LEFT JOIN (
+        SELECT chat_jid, content, sender, is_from_me,
+               ROW_NUMBER() OVER (PARTITION BY chat_jid ORDER BY timestamp DESC) AS rn
+        FROM messages
+    ) latest ON latest.chat_jid = chats.jid AND latest.rn = 1
+"""
+
+_LAST_MESSAGE_COLUMNS = """,
+        latest.content AS last_message,
+        latest.sender AS last_sender,
+        latest.is_from_me AS last_is_from_me"""
+
+# Selected when the caller does not want the last message, so that the row shape
+# stays the same without paying for the ranking above.
+_NO_LAST_MESSAGE_COLUMNS = """,
+        NULL AS last_message,
+        NULL AS last_sender,
+        NULL AS last_is_from_me"""
+
+
+def _chat_query(include_last_message: bool) -> Tuple[str, str]:
+    """Return the extra SELECT columns and the JOIN for a chat query."""
+    if include_last_message:
+        return _LAST_MESSAGE_COLUMNS, _LAST_MESSAGE_JOIN
+    return _NO_LAST_MESSAGE_COLUMNS, ""
+
+
 def get_sender_name(sender_jid: str) -> str:
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
@@ -347,24 +380,20 @@ def list_chats(
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
         
-        # Build base query
-        query_parts = ["""
-            SELECT 
+        # Build base query. The last-message columns are always selected so the
+        # row shape does not depend on the flag: selecting them unconditionally
+        # while joining only sometimes is what made include_last_message=False
+        # fail with "no such column: messages.content".
+        last_columns, last_join = _chat_query(include_last_message)
+        query_parts = [f"""
+            SELECT
                 chats.jid,
                 chats.name,
-                chats.last_message_time,
-                messages.content as last_message,
-                messages.sender as last_sender,
-                messages.is_from_me as last_is_from_me
+                chats.last_message_time{last_columns}
             FROM chats
+            {last_join}
         """]
-        
-        if include_last_message:
-            query_parts.append("""
-                LEFT JOIN messages ON chats.jid = messages.chat_jid 
-                AND chats.last_message_time = messages.timestamp
-            """)
-            
+
         where_clauses = []
         params = []
         
@@ -557,24 +586,16 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
         
-        query = """
-            SELECT 
-                c.jid,
-                c.name,
-                c.last_message_time,
-                m.content as last_message,
-                m.sender as last_sender,
-                m.is_from_me as last_is_from_me
-            FROM chats c
+        last_columns, last_join = _chat_query(include_last_message)
+        query = f"""
+            SELECT
+                chats.jid,
+                chats.name,
+                chats.last_message_time{last_columns}
+            FROM chats
+            {last_join}
+            WHERE chats.jid = ?
         """
-        
-        if include_last_message:
-            query += """
-                LEFT JOIN messages m ON c.jid = m.chat_jid 
-                AND c.last_message_time = m.timestamp
-            """
-            
-        query += " WHERE c.jid = ?"
         
         cursor.execute(query, (chat_jid,))
         chat_data = cursor.fetchone()
