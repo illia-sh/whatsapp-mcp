@@ -10,6 +10,12 @@ Type=simple
 User=whatsapp
 Group=whatsapp
 EnvironmentFile=/etc/whatsapp-mcp/%i.env
+# Files the MCP server hands to the bridge by path -- such as a voice note it has
+# just converted to .ogg -- must be visible to both services. PrivateTmp gives
+# each service its own /tmp, so temporary files go in a per-account directory
+# that both can see instead.
+Environment=TMPDIR=/var/lib/whatsapp-mcp/%i/tmp
+ExecStartPre=/usr/bin/mkdir -p -m 0700 /var/lib/whatsapp-mcp/%i/tmp
 ExecStart=/opt/whatsapp-mcp/bin/whatsapp-bridge
 WorkingDirectory=/var/lib/whatsapp-mcp/%i
 Restart=on-failure

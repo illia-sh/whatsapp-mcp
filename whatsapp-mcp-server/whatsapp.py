@@ -725,6 +725,9 @@ def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
         return False, f"Unexpected error: {str(e)}"
 
 def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
+    # Set when we create a converted copy, so it can be removed once sent. The
+    # caller's own file is never deleted.
+    converted_path = None
     try:
         # Validate input
         if not recipient:
@@ -738,7 +741,7 @@ def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
 
         if not media_path.endswith(".ogg"):
             try:
-                media_path = audio.convert_to_opus_ogg_temp(media_path)
+                media_path = converted_path = audio.convert_to_opus_ogg_temp(media_path)
             except Exception as e:
                 return False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {str(e)}"
         
@@ -763,6 +766,14 @@ def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
         return False, f"Error parsing response: {response.text}"
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
+    finally:
+        # The bridge reads the whole file before answering /api/send, so it is
+        # safe to remove as soon as the request returns, whatever the outcome.
+        if converted_path and os.path.exists(converted_path):
+            try:
+                os.unlink(converted_path)
+            except OSError as e:
+                logger.warning(f"Could not remove temporary audio file {converted_path}: {e}")
 
 def download_media(message_id: str, chat_jid: str) -> Optional[str]:
     """Download media from a message and return the local file path.
