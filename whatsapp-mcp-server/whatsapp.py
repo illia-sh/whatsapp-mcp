@@ -40,6 +40,10 @@ class Message:
     chat_name: Optional[str] = None
     media_type: Optional[str] = None
 
+    def __post_init__(self):
+        # SQLite has no boolean type and hands back 0/1.
+        self.is_from_me = bool(self.is_from_me)
+
 @dataclass
 class Chat:
     jid: str
@@ -48,6 +52,11 @@ class Chat:
     last_message: Optional[str] = None
     last_sender: Optional[str] = None
     last_is_from_me: Optional[bool] = None
+
+    def __post_init__(self):
+        # SQLite has no boolean type and hands back 0/1.
+        if self.last_is_from_me is not None:
+            self.last_is_from_me = bool(self.last_is_from_me)
 
     @property
     def is_group(self) -> bool:
@@ -184,8 +193,8 @@ def list_messages(
     include_context: bool = True,
     context_before: int = 1,
     context_after: int = 1
-) -> List[Message]:
-    """Get messages matching the specified criteria with optional context."""
+) -> str:
+    """Get messages matching the specified criteria, formatted as text."""
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
@@ -265,11 +274,11 @@ def list_messages(
             return format_messages_list(messages_with_context, show_chat_info=True)
             
         # Format and display messages without context
-        return format_messages_list(result, show_chat_info=True)    
-        
+        return format_messages_list(result, show_chat_info=True)
+
     except sqlite3.Error as e:
         logger.error(f"Database error: {e}")
-        return []
+        return f"Could not read messages: database error: {e}"
     finally:
         if 'conn' in locals():
             conn.close()
@@ -531,7 +540,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
             conn.close()
 
 
-def get_last_interaction(jid: str) -> str:
+def get_last_interaction(jid: str) -> Optional[str]:
     """Get most recent message involving the contact."""
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
