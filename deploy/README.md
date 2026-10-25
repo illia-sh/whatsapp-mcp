@@ -199,14 +199,26 @@ Repeat for each account, then try something like "list my recent WhatsApp chats"
 | Restart an account | `sudo systemctl restart whatsapp-bridge@personal whatsapp-mcp@personal` |
 | Rotate a token | edit `/etc/whatsapp-mcp/<account>.env`, restart `whatsapp-mcp@<account>`, then remove and re-add the connector in Claude (header values can't be edited) |
 
-**Updating the MCP server.** From your computer:
+**Updating.** From your computer, `deploy/update.sh` deploys a commit and checks it:
 
 ```bash
-git archive --format=tar.gz HEAD whatsapp-mcp-server | ssh <host> 'sudo tar -xz -C /opt/whatsapp-mcp/server --strip-components=1'
-ssh <host> 'cd /opt/whatsapp-mcp/server && sudo env UV_PYTHON_INSTALL_DIR=/opt/whatsapp-mcp/python UV_PYTHON_PREFERENCE=only-managed UV_CACHE_DIR=/var/cache/uv UV_LINK_MODE=copy /usr/local/bin/uv sync --frozen --no-dev --python 3.11 && sudo systemctl restart whatsapp-mcp@personal whatsapp-mcp@work'
+deploy/update.sh --host <host>                    # MCP server only, at HEAD
+deploy/update.sh --host <host> --bridge           # also rebuild and restart the bridges (needs Docker)
+deploy/update.sh --host <host> --units            # also reinstall the systemd units
+deploy/update.sh --host <host> --ref <commit>     # deploy a specific commit
 ```
 
-To update the bridge, rebuild it (step 1), install it over `/opt/whatsapp-mcp/bin/whatsapp-bridge`, and restart `whatsapp-bridge@<account>`.
+Set `WHATSAPP_DEPLOY_HOST` to skip `--host`. The script:
+
+- sends only committed code, via `git archive`, so uncommitted changes and local message stores never leave your machine;
+- updates every account it finds in `/etc/whatsapp-mcp/*.env`;
+- health-checks each account after restarting it (MCP servers must answer `401` without a token, bridges must answer on their API port) and **rolls back** to the previous version if a check fails;
+- doesn't roll back a bridge that comes up asking for a QR code, because the code is fine and the device just needs pairing again — it tells you which account;
+- records what's deployed, and when, in `/opt/whatsapp-mcp/DEPLOYED`.
+
+A full run with `--bridge` takes around two minutes on a small host, and both accounts briefly reconnect.
+
+To do it by hand instead, unpack `git archive HEAD whatsapp-mcp-server` over `/opt/whatsapp-mcp/server`, run the `uv sync` from step 2, and restart `whatsapp-mcp@<account>`; for the bridge, rebuild it as in step 1, install it over `/opt/whatsapp-mcp/bin/whatsapp-bridge`, and restart `whatsapp-bridge@<account>`.
 
 **When a device expires.** WhatsApp drops linked devices after roughly 20 days without a connection, or when you unlink them on the phone. The bridge then discards the dead session and prints a new QR code to its log. Follow the logs as in step 5 and scan it again; message history is kept.
 
