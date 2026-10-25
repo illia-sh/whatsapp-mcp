@@ -1,0 +1,41 @@
+# MCP server for one account, served over Streamable HTTP on loopback.
+# A reverse proxy terminates TLS in front of it; see deploy/Caddyfile.example.
+[Unit]
+Description=WhatsApp MCP server (%i)
+After=network-online.target whatsapp-bridge@%i.service
+Wants=network-online.target whatsapp-bridge@%i.service
+
+[Service]
+Type=simple
+User=whatsapp
+Group=whatsapp
+EnvironmentFile=/etc/whatsapp-mcp/%i.env
+Environment=WHATSAPP_MCP_TRANSPORT=streamable-http
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/opt/whatsapp-mcp/server
+ExecStart=/opt/whatsapp-mcp/server/.venv/bin/python /opt/whatsapp-mcp/server/main.py
+Restart=on-failure
+RestartSec=10
+
+MemoryHigh=150M
+MemoryMax=250M
+
+# Reads the bridge's message database; SQLite may need to write lock files
+# beside it, so the store directory stays writable.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/whatsapp-mcp/%i
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
