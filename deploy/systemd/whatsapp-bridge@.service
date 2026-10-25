@@ -1,0 +1,45 @@
+# WhatsApp bridge for one account. The instance name (%i) names the account,
+# e.g. `whatsapp-bridge@personal`, and selects /etc/whatsapp-mcp/%i.env.
+[Unit]
+Description=WhatsApp bridge (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=whatsapp
+Group=whatsapp
+EnvironmentFile=/etc/whatsapp-mcp/%i.env
+# Files the MCP server hands to the bridge by path -- such as a voice note it has
+# just converted to .ogg -- must be visible to both services. PrivateTmp gives
+# each service its own /tmp, so temporary files go in a per-account directory
+# that both can see instead.
+Environment=TMPDIR=/var/lib/whatsapp-mcp/%i/tmp
+ExecStartPre=/usr/bin/mkdir -p -m 0700 /var/lib/whatsapp-mcp/%i/tmp
+ExecStart=/opt/whatsapp-mcp/bin/whatsapp-bridge
+WorkingDirectory=/var/lib/whatsapp-mcp/%i
+Restart=on-failure
+RestartSec=10
+
+# Keep a small host responsive: throttle first, kill only as a last resort.
+MemoryHigh=250M
+MemoryMax=400M
+
+# Sandboxing. The bridge needs network access and its own store directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/whatsapp-mcp/%i
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

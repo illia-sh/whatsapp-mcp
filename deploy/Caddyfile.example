@@ -1,0 +1,20 @@
+# /etc/caddy/Caddyfile
+# Caddy obtains and renews a Let's Encrypt certificate for the site address
+# automatically. With only port 443 open it uses the TLS-ALPN challenge, so
+# port 80 can stay closed.
+#
+# Each account's MCP server is published under its own path prefix. The prefix
+# is stripped before proxying, so the server still sees /mcp. Add the
+# connector in Claude as https://<your-domain>/<account>/mcp.
+
+<your-domain> {
+	handle_path /personal/* {
+		reverse_proxy 127.0.0.1:9000
+	}
+	handle_path /work/* {
+		reverse_proxy 127.0.0.1:9001
+	}
+
+	# Anything else: no hint about what's here.
+	respond 404
+}
