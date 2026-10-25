@@ -1,13 +1,26 @@
-# /etc/caddy/Caddyfile
-# Caddy obtains and renews a Let's Encrypt certificate for the site address
-# automatically. With only port 443 open it uses the TLS-ALPN challenge, so
-# port 80 can stay closed.
+# /etc/caddy/Caddyfile -- replace <your-domain> with your hostname.
 #
-# Each account's MCP server is published under its own path prefix. The prefix
-# is stripped before proxying, so the server still sees /mcp. Add the
-# connector in Claude as https://<your-domain>/<account>/mcp.
+# Caddy obtains and renews a Let's Encrypt certificate for the site address
+# automatically. Each account's MCP server is published under its own path
+# prefix; the prefix is stripped before proxying, so the server still sees
+# /mcp. Add the connector in Claude as https://<your-domain>/<account>/mcp.
+
+{
+	# Only port 443 needs to be reachable, so don't listen on 80 for
+	# HTTP->HTTPS redirects.
+	auto_https disable_redirects
+}
 
 <your-domain> {
+	# With port 80 closed, prove control of the domain over 443 (TLS-ALPN).
+	# Without this, Caddy may first try the HTTP challenge, which fails and
+	# counts against Let's Encrypt's failed-validation rate limit.
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+
 	handle_path /personal/* {
 		reverse_proxy 127.0.0.1:9000
 	}
